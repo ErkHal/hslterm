@@ -4,7 +4,8 @@ import requests
 import json
 import argparse
 import string
-from transport import Transport
+import datetime
+import pytz
 from terminaltables import AsciiTable
 from termcolor import colored, cprint
 
@@ -106,6 +107,28 @@ def print_schedule_for_stop(transports, color, background_color):
 
 ##############################################################
 
+class Transport:
+
+    local_tz = pytz.timezone('Europe/Helsinki')
+
+    def __init__(self, stop_name, route_code, headsign, service_day, departure_time):
+        self.stop_name = stop_name
+        self.route_code = route_code
+        self.departure_time = departure_time
+        self.service_day = service_day
+        self.headsign = headsign
+    
+    def get_departure_time(self):
+        return self.get_current_day_midnight()
+    
+    def get_current_day_midnight(self):
+        tz_aware_datetime = datetime.datetime.fromtimestamp(self.service_day + self.departure_time)
+        localizedDateTime = pytz.utc.localize(tz_aware_datetime, is_dst=None)
+        return localizedDateTime.strftime('%H:%M')
+
+##############################################################
+
+#### *** Main execution *** ####
 parser = argparse.ArgumentParser(description='HSL Term - Terminal timetable for HSL (Helsingin Seudun Liikenne) transportations')
 parser.add_argument('stop_ID', type=str, help='Stop number to query timetable for (eq. 1517) ')
 parser.add_argument('-bc', type=str, help='Banner color (ANSI Color formatting) ')
