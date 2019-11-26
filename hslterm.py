@@ -22,7 +22,11 @@ def printBanner(banner_color, banner_bg_color):
     print(colored("\_| |_\____/\_____/   \_/\___|_|  |_| |_| |_|", banner_color, banner_bg_color))
     print()
 
-def fetch_stop_id(stop_number):
+def fetch_stop_ids(stop_searchword):
+
+  if(len(stop_searchword) <= 3):
+    raise Exception('Searchword too short, be more spesific !')
+
   stop_id_query_template = string.Template("""query {
     stops(name: "$stop_number") {
       gtfsId
@@ -32,14 +36,20 @@ def fetch_stop_id(stop_number):
       lon
     }
   }""")
-  prepared_stop_id_query= stop_id_query_template.substitute(stop_number=stop_number)
+  prepared_stop_id_query= stop_id_query_template.substitute(stop_number=stop_searchword)
   response = requests.post(API_URL, json={'query': prepared_stop_id_query})
 
   if(response.status_code == 404):
     raise Exception('Error while retrieving the stop ID')
 
   jsonResponse = json.loads(response.text)
-  return jsonResponse['data']['stops'][0]['gtfsId']
+
+  stop_ids = []
+
+  for stop in jsonResponse['data']['stops']:
+    stop_ids.append(stop['gtfsId'])
+
+  return stop_ids
   
 
 def fetch_timetable(stop_id): 
@@ -47,6 +57,7 @@ def fetch_timetable(stop_id):
   timetable_query_template = string.Template("""query {
     stop(id: "$stop_id") {
       name
+      code
         stoptimesWithoutPatterns {
         scheduledArrival
         realtimeArrival
@@ -75,30 +86,32 @@ def fetch_timetable(stop_id):
 def parse_timetable(response):
   jsonData = json.loads(response.text)
   stop_name = jsonData['data']['stop']['name']
+  stop_code = jsonData['data']['stop']['code']
   departureTransports = jsonData['data']['stop']['stoptimesWithoutPatterns']
   
-  transports = []
+  timetable = Timetable(stop_name, stop_code)
 
   for transport in departureTransports: 
     departure_time = transport['realtimeDeparture']
     service_day = transport['serviceDay']
     headsign = transport['headsign']
     route_code = transport['trip']['route']['shortName']
-    transports.append(Transport(stop_name, route_code, headsign, service_day, departure_time))
+    timetable.scheduledTransports.append(Transport(route_code, headsign, service_day, departure_time))
 
-  return transports
+  return timetable
 
-def print_schedule_for_stop(transports, color, background_color):
+def print_schedule_for_stop(timetable, color, background_color):
+    
     table_data = [
         ['Route', 'Departure Time', 'Headsign'],
     ]
 
-    for trnsprt in transports:
+    for trnsprt in timetable.scheduledTransports:
       table_data.append([trnsprt.route_code, trnsprt.get_departure_time(), trnsprt.headsign])
 
     table = AsciiTable(table_data)
     try:
-      print(colored('+------- ' + transports[0].stop_name + ' -------+', color, background_color))
+      print(colored('+------- ' + timetable.stop_name +  ' ' + timetable.stop_code + ' -------+', color, background_color))
       print(colored(table.table, color, background_color))
     except KeyError:
       print('\nSomething funny with your color selection, couldn\'t display. Checkout ANSI terminal color codes.\n')
@@ -107,12 +120,17 @@ def print_schedule_for_stop(transports, color, background_color):
 
 ##############################################################
 
+class Timetable:
+  def __init__(self, stop_name, stop_code):
+    self.stop_name = stop_name
+    self.stop_code = stop_code
+    self.scheduledTransports = []
+
 class Transport:
 
     local_tz = pytz.timezone('Europe/Helsinki')
 
-    def __init__(self, stop_name, route_code, headsign, service_day, departure_time):
-        self.stop_name = stop_name
+    def __init__(self, route_code, headsign, service_day, departure_time):
         self.route_code = route_code
         self.departure_time = departure_time
         self.service_day = service_day
@@ -130,7 +148,7 @@ class Transport:
 
 #### *** Main execution *** ####
 parser = argparse.ArgumentParser(description='HSL Term - Terminal timetable for HSL (Helsingin Seudun Liikenne) transportations')
-parser.add_argument('stop_ID', type=str, help='Stop number to query timetable for (eq. 1517) ')
+parser.add_argument('stop_searchword', type=str, help='Stop number to query timetable for (eq. 1517) ')
 parser.add_argument('-bc', type=str, help='Banner color (ANSI Color formatting) ')
 parser.add_argument('-bbg', type=str, help='Banner background color (ANSI Color formatting) ')
 parser.add_argument('-tc', type=str, help='Timetable color (ANSI Color formatting) ')
@@ -140,14 +158,24 @@ args = parser.parse_args()
 printBanner(args.bc, args.bbg)
 
 try:
-  stop_id = fetch_stop_id(args.stop_ID)
-  response = fetch_timetable(stop_id)
-  transports = parse_timetable(response)
-  if(transports.count == 0):
+  stop_ids = fetch_stop_ids(args.stop_searchword)
+
+  rawTimetables = []
+
+  for stop_id in stop_ids:
+    rawTimetables.append(fetch_timetable(stop_id))
+
+  parsedSchedules = []
+  for timetable in rawTimetables:
+    parsedSchedules.append(parse_timetable(timetable))
+  #response = fetch_timetable(stop_id)
+  #timetable = parse_timetable(response)
+  if(parsedSchedules.count == 0):
     print('Zero results found')
   else:
-    print_schedule_for_stop(transports, args.tc, args.tbg)
+    for schedule in parsedSchedules:
+      print_schedule_for_stop(schedule, args.tc, args.tbg)
 except Exception as err:
-  print('Error habbened, ei viddu :DDD')
+  print('Error habbened:')
   print(err)
   pass
