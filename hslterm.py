@@ -6,6 +6,8 @@ import argparse
 import string
 import datetime
 import pytz
+import sys
+from time import sleep
 from terminaltables import AsciiTable
 from termcolor import colored, cprint
 
@@ -103,11 +105,11 @@ def parse_timetable(response):
 def print_schedule_for_stop(timetable, color, background_color):
     
     table_data = [
-        ['Route', 'Departure Time', 'Headsign'],
+        ['Route', 'Departure Time', 'Headsign', 'ETA'],
     ]
 
     for trnsprt in timetable.scheduledTransports:
-      table_data.append([trnsprt.route_code, trnsprt.get_departure_time(), trnsprt.headsign])
+      table_data.append([trnsprt.route_code, trnsprt.print_departure_time(), trnsprt.headsign, trnsprt.get_eta()])
 
     table = AsciiTable(table_data)
     try:
@@ -117,6 +119,41 @@ def print_schedule_for_stop(timetable, color, background_color):
       print('\nSomething funny with your color selection, couldn\'t display. Checkout ANSI terminal color codes.\n')
       print(table.table)
       pass
+
+def retrieveTimeTables(searchword):
+  stop_ids = fetch_stop_ids(args.stop_searchword)
+
+  rawTimetables = []
+
+  for stop_id in stop_ids:
+    rawTimetables.append(fetch_timetable(stop_id))
+
+  parsedSchedules = []
+  for timetable in rawTimetables:
+    parsedSchedules.append(parse_timetable(timetable))
+  return parsedSchedules
+
+def printAllSchedules(schedules):
+  for schedule in schedules:
+        print_schedule_for_stop(schedule, args.tc, args.tbg)
+
+def clear_term():
+  print(chr(27) + "[2J")
+
+def run_once(args):
+  clear_term()
+  printBanner(args.bc, args.bbg)
+  parsedSchedules = retrieveTimeTables(args.stop_searchword)
+  printAllSchedules(parsedSchedules)
+
+def run_in_loop(args):
+  while(True):
+    clear_term()
+    printBanner(args.bc, args.bbg)
+    parsedSchedules = retrieveTimeTables(args.stop_searchword)
+    printAllSchedules(parsedSchedules)
+    sys.stdout.flush()
+    sleep(30)
 
 ##############################################################
 
@@ -131,50 +168,42 @@ class Transport:
     local_tz = pytz.timezone('Europe/Helsinki')
 
     def __init__(self, route_code, headsign, service_day, departure_time):
-        self.route_code = route_code
-        self.departure_time = departure_time
-        self.service_day = service_day
-        self.headsign = headsign
+      self.route_code = route_code
+      self.departure_time = departure_time
+      self.service_day = service_day
+      self.headsign = headsign
+
+    def calculate_departure_time(self):
+      tz_aware_datetime = datetime.datetime.fromtimestamp(self.service_day + self.departure_time)
+      return pytz.utc.localize(tz_aware_datetime, is_dst=None)
     
-    def get_departure_time(self):
-        return self.get_current_day_midnight()
+    def print_departure_time(self):
+      departure_time = self.calculate_departure_time()
+      return departure_time.strftime('%H:%M')
     
-    def get_current_day_midnight(self):
-        tz_aware_datetime = datetime.datetime.fromtimestamp(self.service_day + self.departure_time)
-        localizedDateTime = pytz.utc.localize(tz_aware_datetime, is_dst=None)
-        return localizedDateTime.strftime('%H:%M')
+    def get_eta(self):
+      eta_mins = self.calculate_departure_time().minute - datetime.datetime.now().minute
+      eta_string = string.Template("""~ $eta_mins min""").substitute(eta_mins=eta_mins)
+      return eta_string
 
 ##############################################################
 
 #### *** Main execution *** ####
 parser = argparse.ArgumentParser(description='HSL Term - Terminal timetable for HSL (Helsingin Seudun Liikenne) transportations')
 parser.add_argument('stop_searchword', type=str, help='Stop number to query timetable for (eq. 1517) ')
+parser.add_argument('--loop', default=False, help='Run in loop mode, refresh timetables every 30 sec', action='store_true')
 parser.add_argument('-bc', type=str, help='Banner color (ANSI Color formatting) ')
 parser.add_argument('-bbg', type=str, help='Banner background color (ANSI Color formatting) ')
 parser.add_argument('-tc', type=str, help='Timetable color (ANSI Color formatting) ')
 parser.add_argument('-tbg', type=str, help='Timetable background color (ANSI Color formatting) ')
 args = parser.parse_args()
 
-printBanner(args.bc, args.bbg)
-
 try:
-  stop_ids = fetch_stop_ids(args.stop_searchword)
-
-  rawTimetables = []
-
-  for stop_id in stop_ids:
-    rawTimetables.append(fetch_timetable(stop_id))
-
-  parsedSchedules = []
-  for timetable in rawTimetables:
-    parsedSchedules.append(parse_timetable(timetable))
-  #response = fetch_timetable(stop_id)
-  #timetable = parse_timetable(response)
-  if(parsedSchedules.count == 0):
-    print('Zero results found')
+  if (args.loop is False):
+    run_once(args)
   else:
-    for schedule in parsedSchedules:
-      print_schedule_for_stop(schedule, args.tc, args.tbg)
+    run_in_loop(args)
+
 except Exception as err:
   print('Error habbened:')
   print(err)
